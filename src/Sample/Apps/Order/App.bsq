@@ -19,7 +19,7 @@ entity Market provides OrderPrice {
 }
 
 entity Limit provides OrderPrice {
-    invariant this.price >= 0;
+    invariant $price >= 0;
 
     field price: Price;
 }
@@ -30,7 +30,7 @@ concept Request {
 }
 
 entity BuyRequest provides Request {
-    invariant this.quantity >= 0;
+    invariant $quantity >= 0;
 
     field quantity: Quantity;
     field product: ProductID;
@@ -56,7 +56,7 @@ entity DisagreeablePrice provides RejectReason {
 //An order can be:
 //  * Accepted if everything goes well, or
 //  * Invalid if a validation rule was violated -- we treat this as a terminal failure that is checked to never happen, or
-//  * Rejected if the order was valid but we didn't accpt it for business reasons.
+//  * Rejected if the order was valid but we didn't accept it for business reasons.
 concept Response {
 }
 
@@ -65,8 +65,8 @@ concept BuyResponse provides Response {
 }
 
 entity BuyAccepted provides BuyResponse {
-    invariant this.price >= 0;
-    invariant this.quantity >= 0;
+    invariant $price >= 0;
+    invariant $quantity >= 0;
 
     field productId: ProductID;
     field price: Price;
@@ -74,31 +74,33 @@ entity BuyAccepted provides BuyResponse {
 }
 
 entity BuyRejected provides BuyResponse {
-    invariant !this.reasons->empty();
+    invariant !$reasons.empty();
 
     field reasons: List<RejectReason>;
 }
 
 entity SellAccepted provides Response {
-    invariant this.price >= 0;
+    invariant $price >= 0;
 
     field id: ID;
     field price: Price;
 }
 
 function lockinPrice(requestPrice: OrderPrice, marketPrice: Price): Price {
-    return requestPrice->is<Limit>() ? requestPrice.price : marketPrice;
+    return requestPrice.is<Limit>() ? requestPrice.price : marketPrice;
 }
 
 function acceptability(request: BuyRequest, marketPrice: Price, availableInventory: Quantity): List<RejectReason> {
-    var! rejects = List<RejectReason>{};
+    var rejects = List<RejectReason>@{};
 
     if(availableInventory < request.quantity) {
-        rejects = rejects->push(InsufficientInventory{actualQuantity=availableInventory, requestedQuantity=request.quantity});
+        let reasons = List<RejectReason>@{InsufficientInventory@{actualQuantity=availableInventory, requestedQuantity=request.quantity}};
+        rejects = rejects.append(reasons);
     }
 
-    if(lockinPrice(request.requestPrice, marketPrice) < Math::div(Math::mult(marketPrice, 9), 10)) {
-        rejects = rejects->push(DisagreeablePrice{actualPrice=marketPrice, requestedPrice=request.requestPrice});
+    if(lockinPrice(request.requestPrice, marketPrice) < ((marketPrice * 9) / 10)) {
+        let reasons = List<RejectReason>@{DisagreeablePrice@{actualPrice=marketPrice, requestedPrice=request.requestPrice}};
+        rejects = rejects.append(reasons);
     }
     
     return rejects;
@@ -109,36 +111,39 @@ function processBuy(request: BuyRequest, marketPrice: Price, availableInventory:
     var rejections = acceptability(request, marketPrice, availableInventory);
     var lockPrice = lockinPrice(request.requestPrice, marketPrice);
     
-    if(!rejections->empty()) {
-        return BuyRejected{id=request.id, reasons=rejections};
+    if(!rejections.empty()) {
+        return BuyRejected@{id=request.id, reasons=rejections};
     }
     else {
-        return BuyAccepted{id=request.id, productId=request.product, price=lockPrice, quantity=request.quantity};
+        return BuyAccepted@{id=request.id, productId=request.product, price=lockPrice, quantity=request.quantity};
     }
 }
 
 function processSell(request: SellRequest, marketPrice: Price): SellAccepted {
     var lockPrice = lockinPrice(request.requestPrice, marketPrice);
-    return SellAccepted{id=request.id, price=lockPrice};
+    return SellAccepted@{id=request.id, price=lockPrice};
 }
 
 function availability(startOfDayPosition: Quantity, buys: List<BuyResponse>): Quantity {
-    var sumOfBuys = buys->ofType<BuyAccepted>()->map<Quantity>(fn(response) => response.quantity)->sum();
+    var sumOfBuys = buys.ofType<BuyAccepted>().map<Quantity>(fn(response) => response.quantity).sum();
     return startOfDayPosition - sumOfBuys;
 }
 
 ///////////////////////////////////////////////
 
+typedef BuyResponses = Map<ID, BuyResponse>;
+typedef Sells = Map<ID, SellAccepted>;
+
 entity OrderState { 
-    field buys: Map<ID, BuyResponse>;
-    field sells: Map<ID, SellAccepted>;
+    field buys: BuyResponses;
+    field sells: Sells;
 }
 
 //A mock state manager for testing and examples
 function loadState(): { state: OrderState, prices: MarketPrices, quantities: ProductQuantities } {
-    var! state = OrderState{ buys=Map<ID, BuyResponse>{}, sells=Map<ID, SellAccepted>{} };
-    var priceState = Map<ProductID, Price>{ ["coffee", 25], ["tea", 35] };
-    var quantityState = Map<ProductID, Price>{ ["coffee", 3], ["tea", 10] };
+    var state = OrderState@{ buys=BuyResponses@{}, sells=Sells@{} };
+    var priceState = Map<ProductID, Price>@{ "coffee" => 25, "tea" => 35 };
+    var quantityState = Map<ProductID, Price>@{ "coffee" => 3, "tea" => 10 };
 
     return { state=state, prices=priceState, quantities=quantityState };
 }
@@ -152,17 +157,17 @@ entrypoint function apiBuyMarket(id: ID, quantity: Quantity, product: ProductID)
     requires quantity >= 0;
 {
     var { state=state, prices=prices, quantities=quantities } = loadState();
-    if (state.buys->has(id) || state.sells->has(id)) {
+    if (state.buys.has(id) || state.sells.has(id)) {
         return false;
     }
 
-    var request = BuyRequest{id=id, requestPrice=Market{}, quantity=quantity, product=product};
-    var currentMarketPrice = prices->tryGet(request.product);
-    var currentAvailility = availability(quantities->tryGet(request.product) ?| 0, state.buys->getValues());
-    var buyresult = currentMarketPrice ?& processBuy(request, currentMarketPrice, currentAvailility);
-    var nstate = buyresult?->is<BuyAccepted>() ? OrderState{buys=state.buys->add(buyresult.id, buyresult), sells=state.sells} : state;
+    var request = BuyRequest@{id=id, requestPrice=Market@{}, quantity=quantity, product=product};
+    var currentMarketPrice = prices.tryGet(request.product);
+    var currentAvailability = availability(quantities.tryGet(request.product) ?| 0, state.buys.values());
+    var buyresult = currentMarketPrice ?& processBuy(request, currentMarketPrice, currentAvailability);
+    var nstate = buyresult?.is<BuyAccepted>() ? OrderState@{buys=state.buys.unionWith(BuyResponses@{(buyresult.id=>buyresult).convert<ID, BuyResponse>()}), sells=state.sells} : state;
 
-    return storeState(nstate) && buyresult?->is<BuyAccepted>();
+    return storeState(nstate) && buyresult?.is<BuyAccepted>();
 }
 
 entrypoint function apiBuyLimit(id: ID, requestPrice: Price, quantity: Quantity, product: ProductID): Bool
@@ -170,15 +175,15 @@ entrypoint function apiBuyLimit(id: ID, requestPrice: Price, quantity: Quantity,
     requires quantity >= 0;
 {
     var { state=state, prices=prices, quantities=quantities } = loadState();
-    if (state.buys->has(id) || state.sells->has(id)) {
+    if (state.buys.has(id) || state.sells.has(id)) {
         return false;
     }
 
-    var request = BuyRequest{id=id, requestPrice=Limit{price=requestPrice}, quantity=quantity, product=product};
-    var currentMarketPrice = prices->tryGet(request.product);
-    var currentAvailility = availability(quantities->tryGet(request.product) ?| 0, state.buys->getValues());
-    var buyresult = currentMarketPrice ?& processBuy(request, currentMarketPrice, currentAvailility);
-    var nstate = buyresult?->is<BuyAccepted>() ? OrderState{buys=state.buys->add(buyresult.id, buyresult), sells=state.sells} : state;
+    var request = BuyRequest@{id=id, requestPrice=Limit@{price=requestPrice}, quantity=quantity, product=product};
+    var currentMarketPrice = prices.tryGet(request.product);
+    var currentAvailability = availability(quantities.tryGet(request.product) ?| 0, state.buys.values());
+    var buyresult = currentMarketPrice ?& processBuy(request, currentMarketPrice, currentAvailability);
+    var nstate = buyresult?.is<BuyAccepted>() ? OrderState@{buys=state.buys.unionWith(BuyResponses@{(buyresult.id=>buyresult).convert<ID, BuyResponse>()}), sells=state.sells} : state;
 
-    return storeState(nstate) && buyresult?->is<BuyAccepted>();
+    return storeState(nstate) && buyresult?.is<BuyAccepted>();
 }
