@@ -11,8 +11,8 @@ typedef Quantity = Int;
 typedef Value = Int;
 
 entity Deal { 
-    invariant this.price >= 0; //TODO in Bosque add diagnostics msg option
-    invariant this.quantity >= 0;
+    invariant $price >= 0; //TODO in Bosque add diagnostics msg option
+    invariant $quantity >= 0;
 
     field id: ID;
     field product: ProductID;
@@ -26,8 +26,8 @@ concept Event {
 }
 
 entity DealOpened provides Event {
-    invariant this.price >= 0; //TODO in Bosque add diagnostics msg option
-    invariant this.quantity >= 0;
+    invariant $price >= 0; //TODO in Bosque add diagnostics msg option
+    invariant $quantity >= 0;
 
     field dealId: ID;
     field productId: ProductID;
@@ -40,19 +40,20 @@ entity DealClosed provides Event {
 }
 
 function dealValue(d: Deal): Value {
-    return Math::mult(d.price, d.quantity);
+    return d.price * d.quantity;
 }
 
 function openDeal(state: DealState, deal: DealOpened): DealState {
-    check !state->has(deal.dealId);
+    check !state.has(deal.dealId);
        
-    return state->insert(deal.dealId, Deal{id=deal.dealId, product=deal.productId, price=deal.price, quantity=deal.quantity});
+    return state.unionWith(DealState@{deal.dealId=>Deal@{id=deal.dealId, product=deal.productId, price=deal.price, quantity=deal.quantity}});
 }
 
 function closeDeal(state: DealState, deal: DealClosed): DealState {
-    check state->has(deal.dealId);
-       
-    return state->remove(deal.dealId);
+    check state.has(deal.dealId);
+
+    let toExclude = Set<ID>@{deal.dealId};
+    return state.excludeSet(toExclude);
 }
 
 function processDealEvent(state: DealState, event: Event): DealState {
@@ -64,10 +65,10 @@ function processDealEvent(state: DealState, event: Event): DealState {
 
 //A mock deal state manager for testing and examples
 function loadDealState(): DealState {
-    var! state = DealState{};
+    var state = DealState@{};
 
-    state = processDealEvent(state, DealOpened{dealId = 1, productId = "tea", price = 10, quantity = 100});
-    state = processDealEvent(state, DealOpened{dealId = 2, productId = "coffee", price = 1, quantity = 100});
+    state = processDealEvent(state, DealOpened@{dealId = 1, productId = "tea", price = 10, quantity = 100});
+    state = processDealEvent(state, DealOpened@{dealId = 2, productId = "coffee", price = 1, quantity = 100});
 
     return state;
 }
@@ -82,21 +83,21 @@ entrypoint function openDealAPI(dealid: ID, product: ProductID, price: Int, quan
     requires quantity >= 0; //<----- oops forgot to validate input
 {
     var state = loadDealState();
-    if(state->has(dealid)) {
+    if(state.has(dealid)) {
         return false;
     }
 
-    var nstate = processDealEvent(state, DealOpened{dealId = dealid, productId = product, price = price, quantity = quantity});
+    var nstate = processDealEvent(state, DealOpened@{dealId = dealid, productId = product, price = price, quantity = quantity});
     return storeDealState(nstate);
 }
 
 entrypoint function closeDealAPI(dealid: ID): Bool 
 {
     var state = loadDealState();
-    if(!state->has(dealid)) {
+    if(!state.has(dealid)) {
         return false;
     }
 
-    var nstate = processDealEvent(state, DealClosed{dealId = dealid});
+    var nstate = processDealEvent(state, DealClosed@{dealId = dealid});
     return storeDealState(nstate);
 }
